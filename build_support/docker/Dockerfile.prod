@@ -1,0 +1,107 @@
+# build/docker/Dockerfile.prod
+# Multi-stage production Dockerfile
+
+# Build stage
+FROM golang:1.22-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    gcc \
+    musl-dev \
+    ca-certificates
+
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download && \
+    go mod verify
+
+# Copy source code
+COPY . .
+
+# Build binaries with optimizations
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.Version=$(git describe --tags --always --dirty 2>/dev/null || echo 'prod') \
+    -X main.BuildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
+    -a -installsuffix cgo \
+    -o api ./cmd/api/main.go && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -a -installsuffix cgo \
+    -o worker ./cmd/worker/main.go && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -a -installsuffix cgo \
+    -o migrate ./cmd/migrate/main.go
+
+# Runtime stage - API
+FROM alpine:3.19 AS api
+
+# Install runtime dependencies
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    curl
+
+# Create non-root user
+RUN addgroup -g 1001 -S resell && \
+    adduser -u 1001 -S resell -G resell
+
+WORKDIR /app
+
+# Copy binary and migrations from builder
+COPY --from=builder --chown=resell:resell /build/api /app/api
+COPY --from=builder --chown=resell:resell /build/migrations /app/migrations
+
+# Use non-root user
+USER resell
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/api/v1/health || exit 1
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/api"]
+
+# Runtime stage - Worker
+FROM alpine:3.19 AS worker
+
+# Install runtime dependencies
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata
+
+# Create non-root user
+RUN addgroup -g 1001 -S resell && \
+    adduser -u 1001 -S resell -G resell
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder --chown=resell:resell /build/worker /app/worker
+
+# Use non-root user
+USER resell
+
+ENTRYPOINT ["/app/worker"]
+
+# Runtime stage - Migrate
+FROM alpine:3.19 AS migrate
+
+# Install runtime dependencies
+RUN apk --no-cache add \
+    ca-certificates \
+    postgresql-client
+
+WORKDIR /app
+
+# Copy migrate binary and migrations
+COPY --from=builder /build/migrate /app/migrate
+COPY --from=builder /build/migrations /app/migrations
+
+ENTRYPOINT ["/app/migrate"]

@@ -1,0 +1,185 @@
+# docker-compose.yml
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: resell_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-resell}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-resell_dev_2025}
+      POSTGRES_DB: ${DB_NAME:-resell_inventory}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-resell} -d ${DB_NAME:-resell_inventory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: resell_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ARM64-compatible Asynq monitoring solution
+  asynqmon:
+    image: hibiken/asynqmon:latest
+    container_name: resell_asynqmon
+    restart: unless-stopped
+    platform: linux/amd64  # Force x86_64 emulation on ARM64
+    ports:
+      - "8081:8080"
+    environment:
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: "0"
+      REDIS_INSECURE_SKIP_TLS_VERIFY: "true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ARM64-native MinIO for local S3 development
+  minio:
+    image: minio/minio:latest
+    container_name: resell_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin123}
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Create MinIO bucket on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: resell_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      mc mb local/resell-uploads --ignore-existing;
+      mc anonymous set public local/resell-uploads;
+      echo 'MinIO bucket created successfully';
+      exit 0;
+      "
+    networks:
+      - resell_network
+
+  # ARM64-native pgAdmin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: resell_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "admin@resell.dev" 
+      PGADMIN_DEFAULT_PASSWORD: "supersecret"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ARM64-native Mailhog
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: resell_mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - resell_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  resell_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  pgadmin_data:
+    driver: local
