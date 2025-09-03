@@ -92,13 +92,6 @@ type AuctionInfo struct {
 	SalesTaxPercent      float64
 }
 
-// SeederState tracks processing state
-type SeederState struct {
-	ProcessedInvoices []string  `json:"processed_invoices"`
-	ProcessedCount    int       `json:"processed_count"`
-	LastUpdate        time.Time `json:"last_update"`
-}
-
 // CategoryClassifier handles intelligent categorization
 type CategoryClassifier struct {
 	categoryKeywords  map[ItemCategory][]string
@@ -110,40 +103,41 @@ func NewCategoryClassifier() *CategoryClassifier {
 		categoryKeywords: map[ItemCategory][]string{
 			CategoryAntiques: {"antique", "victorian", "edwardian", "georgian", "art deco",
 				"art nouveau", "mid century", "mcm", "vintage"},
-			CategoryArt: {"painting", "print", "lithograph", "etching", "drawing",
-				"sculpture", "statue", "canvas", "watercolor", "oil painting"},
+			CategoryArt: {"painting", "print", "lithograph", "etching", "drawing", "framed",
+				"sculpture", "statue", "canvas", "watercolor", "oil painting", "serigraph"},
 			CategoryBooks: {"book", "volume", "edition", "manuscript", "atlas",
 				"encyclopedia", "novel", "hardcover", "paperback"},
 			CategoryCeramics: {"ceramic", "porcelain", "pottery", "stoneware", "earthenware",
-				"terracotta", "faience", "majolica"},
+				"terracotta", "faience", "majolica", "capodimonte", "capidimonte"},
 			CategoryChina: {"china", "dinnerware", "plate", "bowl", "teacup", "saucer",
-				"serving", "platter", "tureen", "gravy boat"},
+				"serving", "platter", "tureen", "gravy boat", "ming"},
 			CategoryClothing: {"dress", "shirt", "pants", "jacket", "coat", "shoes",
 				"hat", "scarf", "vintage clothing", "designer"},
 			CategoryCoins: {"coin", "numismatic", "currency", "mint", "proof",
 				"commemorative", "gold coin", "silver coin"},
 			CategoryCollectibles: {"collectible", "limited edition", "memorabilia", "trading card",
-				"figurine", "model", "diecast"},
+				"figurine", "model", "diecast", "precious moments", "danbury mint", "enesco", "lladro"},
 			CategoryElectronics: {"electronic", "computer", "phone", "camera", "stereo",
-				"radio", "television", "console", "gadget"},
-			CategoryFurniture: {"table", "chair", "desk", "cabinet", "dresser", "sofa",
-				"bench", "ottoman", "bookcase", "sideboard", "chest"},
+				"radio", "television", "console", "gadget", "sewing machine", "grinder"},
+			CategoryFurniture: {"table", "chair", "desk", "cabinet", "dresser", "sofa", "lamp",
+				"bench", "ottoman", "bookcase", "sideboard", "chest", "console", "barstool", "shelves"},
 			CategoryGlass: {"glass", "crystal", "cut glass", "pressed glass", "blown glass",
-				"stained glass", "depression glass", "carnival glass"},
+				"stained glass", "depression glass", "carnival glass", "art glass", "vase", "bowl"},
 			CategoryJewelry: {"jewelry", "ring", "necklace", "bracelet", "earring",
-				"brooch", "pendant", "gold", "silver", "diamond", "gemstone"},
+				"brooch", "pendant", "gold", "silver", "diamond", "gemstone", "sterling"},
 			CategoryLinens: {"linen", "tablecloth", "napkin", "doily", "runner",
 				"bedding", "quilt", "blanket", "textile", "fabric"},
 			CategoryMusical: {"musical", "instrument", "piano", "guitar", "violin",
-				"trumpet", "saxophone", "drum", "sheet music"},
+				"trumpet", "saxophone", "drum", "sheet music", "music box"},
 			CategorySilver: {"sterling", "silver", "silverplate", "flatware", "hollowware",
 				"tea set", "candelabra", "serving piece"},
 			CategoryStamps: {"stamp", "philatelic", "postage", "first day cover",
 				"postmark", "album"},
 			CategoryTools: {"tool", "drill", "saw", "hammer", "wrench", "pliers",
-				"vintage tool", "woodworking", "machinist"},
+				"vintage tool", "woodworking", "machinist", "grinder"},
 			CategoryToys: {"toy", "doll", "action figure", "game", "puzzle",
-				"teddy bear", "train set", "lego", "vintage toy"},
+				"teddy bear", "train set", "lego", "vintage toy", "lionel"},
+			CategoryVintage: {"brass", "cherub", "andirons", "bookend", "dolphin", "copper", "bronze"},
 		},
 		conditionKeywords: map[ItemCondition][]string{
 			ConditionMint:        {"mint", "pristine", "perfect", "new"},
@@ -201,7 +195,7 @@ func (c *CategoryClassifier) Classify(text string) (ItemCategory, ItemCondition)
 	return category, condition
 }
 
-// PDFExtractor handles PDF parsing with proven logic from Python
+// PDFExtractor handles PDF parsing with enhanced logic
 type PDFExtractor struct {
 	classifier *CategoryClassifier
 	logger     *slog.Logger
@@ -231,20 +225,19 @@ func (e *PDFExtractor) LoadAuctions(filepath string) error {
 
 	rowIdx := 0
 	err = sheet.ForEachRow(func(r *xlsx.Row) error {
-		// skip header
+		// Skip header
 		if rowIdx == 0 {
 			rowIdx++
 			return nil
 		}
 		rowIdx++
 
-		// defensively get cells by index
+		// Get cells by index
 		get := func(i int) string {
 			c := r.GetCell(i)
 			if c == nil {
 				return ""
 			}
-			// FormattedValue respects number/date formats
 			if s, err := c.FormattedValue(); err == nil {
 				return strings.TrimSpace(s)
 			}
@@ -257,11 +250,8 @@ func (e *PDFExtractor) LoadAuctions(filepath string) error {
 		}
 
 		auctionID, _ := strconv.Atoi(get(1))
-
 		dateStr := get(2)
-		// adjust layout if your sheet uses a different format
 		date, _ := time.Parse("2006-01-02", dateStr)
-
 		bpPercent, _ := strconv.ParseFloat(get(3), 64)
 		taxPercent, _ := strconv.ParseFloat(get(4), 64)
 
@@ -282,7 +272,7 @@ func (e *PDFExtractor) LoadAuctions(filepath string) error {
 	return nil
 }
 
-// ExtractItemsFromPDF extracts items using the proven Python logic
+// ExtractItemsFromPDF extracts items from your specific PDF format
 func (e *PDFExtractor) ExtractItemsFromPDF(filepath string, invoiceID string) ([]InventoryItem, error) {
 	e.logger.Info("Processing PDF",
 		slog.String("invoice_id", invoiceID),
@@ -297,8 +287,8 @@ func (e *PDFExtractor) ExtractItemsFromPDF(filepath string, invoiceID string) ([
 		return nil, fmt.Errorf("failed to extract text: %w", err)
 	}
 
-	// Parse items using fallback method (proven logic from Python)
-	rawItems := e.extractFallbackItems(textLines)
+	// Parse items using the corrected logic
+	rawItems := e.extractItemsFromInvoice(textLines)
 
 	// Create inventory items
 	items := make([]InventoryItem, 0, len(rawItems))
@@ -334,7 +324,7 @@ func (e *PDFExtractor) extractTextLines(filepath string) ([]string, error) {
 		if err != nil {
 			e.logger.Warn("Failed to extract text from page",
 				slog.Int("page", pageNum),
-				slog.LevelError)
+				slog.String("error", err.Error()))
 			continue
 		}
 
@@ -350,112 +340,121 @@ type rawItem struct {
 	bid         float64
 }
 
-// extractFallbackItems implements the proven extraction logic from Python
-func (e *PDFExtractor) extractFallbackItems(textLines []string) []rawItem {
-	// Find start of items table
+// extractItemsFromInvoice - Fixed to match the working Python logic
+// extractItemsFromInvoice - robust line-buffering and zero-price support
+func (e *PDFExtractor) extractItemsFromInvoice(textLines []string) []rawItem {
+	var items []rawItem
+
+	// Header/footer and helpers
+	headerRe := regexp.MustCompile(`(?i)(LOT.*PRICE|LEAD.*ITEM.*PRICE)`)
+	dashRe := regexp.MustCompile(`-{7,}`)
+	footerRe := regexp.MustCompile(`(?i)(A payment of|SUBTOTAL)`)
+	// allow optional $ and thousands separators, anchored to end of line
+	priceRe := regexp.MustCompile(`\$?\s*\d{1,3}(?:,\d{3})*\.\d{2}\s*$`)
+
+	// Find start (line after header)
 	start := 0
-	headerRe := regexp.MustCompile(`(?i)LOT.*PRICE`)
 	for idx, line := range textLines {
 		if headerRe.MatchString(line) {
 			start = idx + 1
+			e.logger.Debug("Found header", slog.Int("line", idx))
 			break
 		}
 	}
-
-	dashRe := regexp.MustCompile(`-{7,}`)
-	footerRe := regexp.MustCompile(`(?i)A payment of`)
-	priceRe := regexp.MustCompile(`\d{1,3}(?:,\d{3})*\.\d{2}$`)
-
-	var items []rawItem
-	var current *struct {
-		descLines []string
-		price     float64
+	if start == 0 {
+		e.logger.Warn("No header found, starting from beginning")
 	}
 
-	for _, line := range textLines[start:] {
-		txt := strings.TrimSpace(line)
+	// Buffer description lines until we see a price
+	var pendingDesc []string
 
-		// Skip empty lines or stop at subtotal
-		if txt == "" || strings.Contains(strings.ToUpper(txt), "SUBTOTAL") {
-			continue
+	// helper to finalize one item
+	addItem := func(desc string, price float64) {
+		desc = cleanDescription(desc)
+		if strings.TrimSpace(desc) == "" {
+			return
 		}
-
-		// Stop at footer
-		if footerRe.MatchString(txt) {
-			break
-		}
-
-		// Strip dash-filler
-		if dashRe.MatchString(txt) {
-			parts := dashRe.Split(txt, 2)
-			txt = strings.TrimSpace(parts[0])
-		}
-
-		if txt == "" {
-			continue
-		}
-
-		// Check if line has a price at the end
-		if priceRe.MatchString(txt) {
-			parts := strings.Fields(txt)
-			if len(parts) == 0 {
-				continue
-			}
-
-			price := parseCurrency(parts[len(parts)-1])
-			if price == 0 {
-				continue
-			}
-
-			// Strip lot/qty tokens if present
-			var descTokens []string
-			if len(parts) >= 4 && isDigit(parts[len(parts)-2]) && isDigit(parts[len(parts)-3]) {
-				descTokens = parts[:len(parts)-3]
-			} else {
-				descTokens = parts[:len(parts)-1]
-			}
-
-			firstDesc := strings.Join(descTokens, " ")
-
-			// Save previous item if exists
-			if current != nil {
-				items = append(items, rawItem{
-					description: strings.Join(current.descLines, " "),
-					bid:         current.price,
-				})
-			}
-
-			// Start new item
-			current = &struct {
-				descLines []string
-				price     float64
-			}{
-				descLines: []string{},
-				price:     price,
-			}
-
-			if firstDesc != "" {
-				current.descLines = append(current.descLines, firstDesc)
-			}
-		} else {
-			// This is a continuation line
-			if current != nil {
-				current.descLines = append(current.descLines, txt)
-			} else {
-				e.logger.Warn("Orphan overflow line", slog.String("text", txt))
-			}
-		}
-	}
-
-	// Don't forget the last item
-	if current != nil {
 		items = append(items, rawItem{
-			description: strings.Join(current.descLines, " "),
-			bid:         current.price,
+			description: desc,
+			bid:         price, // may be 0.00
 		})
 	}
 
+	for i := start; i < len(textLines); i++ {
+		line := strings.TrimSpace(textLines[i])
+		if line == "" {
+			continue
+		}
+
+		// Hit footer: stop parsing items
+		if footerRe.MatchString(line) {
+			e.logger.Debug("Found footer, stopping", slog.String("line", line))
+			break
+		}
+
+		// Strip long filler dashes if present (keep left part as content)
+		if dashRe.MatchString(line) {
+			parts := dashRe.Split(line, 2)
+			line = strings.TrimSpace(parts[0])
+			if line == "" {
+				continue
+			}
+		}
+
+		// If the line ends with a price, finalize the buffered description + inline desc fragment
+		if priceRe.MatchString(line) {
+			// Extract numeric price string
+			priceStr := strings.TrimSpace(priceRe.FindString(line))
+			price := parseCurrency(priceStr)
+
+			// Description fragment on same line (before the price)
+			descPart := strings.TrimSpace(priceRe.ReplaceAllString(line, ""))
+
+			// Some PDFs place lot/metadata between desc and price on the same line
+			// Example patterns like "18488 17" or "6607 28" or "131811 65 G2CG2C"
+			metaRe := regexp.MustCompile(`\b[0-9A-Z]{2,}(?:\s+[0-9A-Z]{1,}){0,3}$`)
+			descPart = strings.TrimSpace(metaRe.ReplaceAllString(descPart, ""))
+
+			// Merge: buffered + inline fragment
+			fullDesc := strings.Join(append(pendingDesc, descPart), " ")
+			fullDesc = strings.TrimSpace(fullDesc)
+
+			addItem(fullDesc, price)
+
+			// Reset buffer for next item
+			pendingDesc = pendingDesc[:0]
+			continue
+		}
+
+		// Otherwise, this is part of the description—buffer it
+		pendingDesc = append(pendingDesc, line)
+	}
+
+	// Note: do NOT emit a trailing buffered item without a detected price.
+	// These invoices always have a SUBTOTAL after items; if we never saw a price,
+	// we likely buffered non-item text (headers/notes).
+	e.logger.Info("Extracted raw items", slog.Int("count", len(items)))
 	return items
+}
+
+func cleanDescription(desc string) string {
+	// Remove item IDs and lot numbers that might be embedded
+	desc = regexp.MustCompile(`\b\d{5,6}\s+\d{1,3}\s+[A-Z0-9]+\b`).ReplaceAllString(desc, "")
+
+	// Remove standalone numbers that are likely IDs
+	desc = regexp.MustCompile(`^\d+\s+`).ReplaceAllString(desc, "")
+	desc = regexp.MustCompile(`\s+\d{4,}$`).ReplaceAllString(desc, "")
+
+	// Remove multiple spaces
+	desc = regexp.MustCompile(`\s+`).ReplaceAllString(desc, " ")
+
+	// Remove dashes used as fillers
+	desc = regexp.MustCompile(`-{3,}`).ReplaceAllString(desc, " ")
+
+	// Clean up
+	desc = strings.TrimSpace(desc)
+
+	return desc
 }
 
 func (e *PDFExtractor) getAuctionInfo(invoiceID string) AuctionInfo {
@@ -468,8 +467,8 @@ func (e *PDFExtractor) getAuctionInfo(invoiceID string) AuctionInfo {
 		AuctionID:            0,
 		InvoiceID:            invoiceID,
 		Date:                 time.Now(),
-		BuyersPremiumPercent: 20.0,
-		SalesTaxPercent:      8.0,
+		BuyersPremiumPercent: 18.0,  // Common default
+		SalesTaxPercent:      8.625, // NY sales tax
 	}
 }
 
@@ -514,7 +513,7 @@ func (e *PDFExtractor) createInventoryItem(description string, bid float64, invo
 	}
 }
 
-// Database operations
+// SaveItems persists inventory items to the database
 func (e *PDFExtractor) SaveItems(ctx context.Context, items []InventoryItem) error {
 	if len(items) == 0 {
 		return nil
@@ -549,17 +548,22 @@ func (e *PDFExtractor) SaveItems(ctx context.Context, items []InventoryItem) err
 
 	// Execute batch
 	br := tx.SendBatch(ctx, batch)
-	defer br.Close()
 
-	// Check results
+	// Process all batch results
 	for range items {
 		_, err := br.Exec()
 		if err != nil {
+			br.Close()
 			return fmt.Errorf("failed to insert item: %w", err)
 		}
 	}
 
-	// Commit transaction
+	// Close batch results
+	if err := br.Close(); err != nil {
+		return fmt.Errorf("failed to close batch results: %w", err)
+	}
+
+	// Commit the transaction
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -570,9 +574,9 @@ func (e *PDFExtractor) SaveItems(ctx context.Context, items []InventoryItem) err
 
 // Helper functions
 func parseCurrency(val string) float64 {
-	// Remove commas and dollar signs
-	cleaned := strings.ReplaceAll(val, ",", "")
-	cleaned = strings.ReplaceAll(cleaned, "$", "")
+	// Remove dollar sign, commas, and spaces
+	cleaned := strings.ReplaceAll(val, "$", "")
+	cleaned = strings.ReplaceAll(cleaned, ",", "")
 	cleaned = strings.TrimSpace(cleaned)
 
 	result, err := strconv.ParseFloat(cleaned, 64)
@@ -582,17 +586,12 @@ func parseCurrency(val string) float64 {
 	return result
 }
 
-func isDigit(s string) bool {
-	_, err := strconv.Atoi(s)
-	return err == nil
-}
-
 func generateItemName(description string) string {
-	// Take first 50 characters or first sentence
+	// Take first 60 characters or first sentence
 	name := description
-	if len(name) > 50 {
-		name = name[:50]
-		if idx := strings.Index(description[:50], "."); idx > 0 {
+	if len(name) > 60 {
+		name = name[:60]
+		if idx := strings.Index(description[:60], "."); idx > 0 {
 			name = description[:idx]
 		}
 	}
@@ -601,7 +600,7 @@ func generateItemName(description string) string {
 	name = regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
 	name = strings.TrimSpace(name)
 
-	// Remove lot number if at start
+	// Remove any leading numbers
 	name = regexp.MustCompile(`^\d+\s+`).ReplaceAllString(name, "")
 
 	if name == "" {
@@ -609,7 +608,13 @@ func generateItemName(description string) string {
 	}
 
 	// Title case
-	return strings.Title(strings.ToLower(name))
+	words := strings.Fields(strings.ToLower(name))
+	for i, word := range words {
+		if len(word) > 0 {
+			words[i] = strings.ToUpper(string(word[0])) + word[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func extractKeywords(description string) []string {
@@ -617,6 +622,8 @@ func extractKeywords(description string) []string {
 		"the": true, "a": true, "an": true, "and": true, "or": true,
 		"but": true, "in": true, "on": true, "at": true, "to": true,
 		"for": true, "of": true, "with": true, "by": true, "from": true,
+		"is": true, "was": true, "are": true, "were": true, "total": true,
+		"set": true, "lot": true, "pair": true,
 	}
 
 	// Extract words
@@ -673,12 +680,12 @@ func main() {
 
 	// Database connection
 	dbURL := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=%s",
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_PORT"),
-		os.Getenv("DB_NAME"),
-		os.Getenv("DB_SSL_MODE"),
+		getEnv("DB_USER", "resell"),
+		getEnv("DB_PASSWORD", "resell_dev_2025"),
+		getEnv("DB_HOST", "localhost"),
+		getEnv("DB_PORT", "5432"),
+		getEnv("DB_NAME", "resell_inventory"),
+		getEnv("DB_SSL_MODE", "disable"),
 	)
 
 	ctx := context.Background()
@@ -689,7 +696,7 @@ func main() {
 	if !*dryRun {
 		db, err = pgxpool.New(ctx, dbURL)
 		if err != nil {
-			logger.Error("Failed to connect to database", slog.LevelError)
+			logger.Error("Failed to connect to database", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 		defer db.Close()
@@ -701,12 +708,18 @@ func main() {
 	// Load auctions if file exists
 	if _, err := os.Stat(*auctionsFile); err == nil {
 		if err := extractor.LoadAuctions(*auctionsFile); err != nil {
-			logger.Error("Failed to load auctions", slog.LevelError)
+			logger.Error("Failed to load auctions", slog.String("error", err.Error()))
 			// Continue without auction metadata
 		}
 	}
 
 	// Load state
+	type SeederState struct {
+		ProcessedInvoices []string  `json:"processed_invoices"`
+		ProcessedCount    int       `json:"processed_count"`
+		LastUpdate        time.Time `json:"last_update"`
+	}
+
 	var state SeederState
 	if !*force {
 		if stateData, err := os.ReadFile(*stateFile); err == nil {
@@ -717,12 +730,14 @@ func main() {
 	// Process PDFs
 	pdfFiles, err := filepath.Glob(filepath.Join(*invoicesDir, "*.pdf"))
 	if err != nil {
-		logger.Error("Failed to find PDF files", slog.LevelError)
+		logger.Error("Failed to find PDF files", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	totalProcessed := 0
 	totalItems := 0
+	failedInvoices := []string{}
+	successDetails := map[string]int{}
 
 	for i, pdfFile := range pdfFiles {
 		invoiceID := strings.TrimSuffix(filepath.Base(pdfFile), ".pdf")
@@ -750,8 +765,17 @@ func main() {
 		if err != nil {
 			logger.Error("Failed to extract items",
 				slog.String("invoice_id", invoiceID),
-				slog.LevelError)
+				slog.String("error", err.Error()))
+			failedInvoices = append(failedInvoices, invoiceID)
 			fmt.Printf("ERROR: Failed to process invoice_id:%s - %v\n", invoiceID, err)
+			continue
+		}
+
+		if len(items) == 0 {
+			logger.Warn("No items extracted",
+				slog.String("invoice_id", invoiceID))
+			fmt.Printf("WARNING: No items found in invoice_id:%s\n", invoiceID)
+			failedInvoices = append(failedInvoices, fmt.Sprintf("%s (0 items)", invoiceID))
 			continue
 		}
 
@@ -760,13 +784,15 @@ func main() {
 			if err := extractor.SaveItems(ctx, items); err != nil {
 				logger.Error("Failed to save items",
 					slog.String("invoice_id", invoiceID),
-					slog.LevelError)
+					slog.String("error", err.Error()))
+				failedInvoices = append(failedInvoices, invoiceID)
 				fmt.Printf("ERROR: Failed to save invoice_id:%s - %v\n", invoiceID, err)
 				continue
 			}
 		}
 
 		fmt.Printf("SUCCESS: Processed invoice_id:%s - %d items\n", invoiceID, len(items))
+		successDetails[invoiceID] = len(items)
 
 		totalProcessed++
 		totalItems += len(items)
@@ -775,20 +801,58 @@ func main() {
 		state.ProcessedInvoices = append(state.ProcessedInvoices, invoiceID)
 		state.ProcessedCount = len(state.ProcessedInvoices)
 		state.LastUpdate = time.Now()
+
+		// Save state periodically
+		if !*dryRun && i%10 == 0 {
+			stateData, _ := json.MarshalIndent(state, "", "  ")
+			os.WriteFile(*stateFile, stateData, 0644)
+		}
 	}
 
-	// Save state
+	// Save final state
 	if !*dryRun {
 		stateData, _ := json.MarshalIndent(state, "", "  ")
 		os.WriteFile(*stateFile, stateData, 0644)
 	}
 
 	// Summary
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("📊 SEEDING OPERATION SUMMARY")
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("Total PDFs Processed: %d\n", totalProcessed)
+	fmt.Printf("Total Items Extracted: %d\n", totalItems)
+	if totalProcessed > 0 {
+		fmt.Printf("Average Items per Invoice: %.1f\n", float64(totalItems)/float64(totalProcessed))
+	}
+
+	// Show successful extractions
+	if len(successDetails) > 0 {
+		fmt.Printf("\n✅ Successfully Processed (%d invoices):\n", len(successDetails))
+		for inv, count := range successDetails {
+			fmt.Printf("  - %s: %d items\n", inv, count)
+		}
+	}
+
+	if len(failedInvoices) > 0 {
+		fmt.Printf("\n⚠️  Failed/Empty Invoices (%d):\n", len(failedInvoices))
+		for _, inv := range failedInvoices {
+			fmt.Printf("  - %s\n", inv)
+		}
+	}
+
 	logger.Info("Seed operation completed",
 		slog.Int("invoices_processed", totalProcessed),
-		slog.Int("items_created", totalItems))
+		slog.Int("items_created", totalItems),
+		slog.Int("failed_invoices", len(failedInvoices)))
 
 	if *dryRun {
 		fmt.Println("\n[DRY RUN] No changes were made to the database")
 	}
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
