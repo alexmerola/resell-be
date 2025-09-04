@@ -53,7 +53,7 @@ GREEN := \033[0;32m
 YELLOW := \033[1;33m
 NC := \033[0m # No Color
 
-.PHONY: all build clean test help
+.PHONY: all build clean test test-unit test-integration test-e2e test-coverage test-race test-bench mocks help
 
 ## help: Display this help message
 help:
@@ -138,26 +138,49 @@ clean:
 
 ##@ Testing
 
-## test: Run all tests
-test:
-	@echo "$(GREEN)Running tests...$(NC)"
-	@$(GOTEST) -v -race -coverprofile=coverage.out ./...
+test: ## Run all tests
+	go test ./...
 
-## test-unit: Run unit tests only
-test-unit:
-	@echo "$(GREEN)Running unit tests...$(NC)"
-	@$(GOTEST) -v -short -race ./...
+test-unit: ## Run unit tests only
+	go test -short ./...
 
-## test-integration: Run integration tests
-test-integration:
-	@echo "$(GREEN)Running integration tests...$(NC)"
-	@$(GOTEST) -v -race -run Integration ./test/integration/...
+test-integration: ## Run integration tests
+	go test -tags=integration ./...
 
-## test-coverage: Generate test coverage report
-test-coverage: test
-	@echo "$(GREEN)Generating coverage report...$(NC)"
-	@go tool cover -html=coverage.out -o coverage.html
-	@echo "$(GREEN)✓ Coverage report generated: coverage.html$(NC)"
+test-e2e: ## Run end-to-end tests
+	docker-compose up -d --wait
+	go test -tags=e2e ./test/e2e/...
+	docker-compose down
+
+test-coverage: ## Run tests with coverage
+	go test -coverprofile=coverage.out -covermode=atomic ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+test-race: ## Run tests with race detector
+	go test -race ./...
+
+test-bench: ## Run benchmarks
+	go test -bench=. -benchmem ./test/benchmarks/...
+
+test-watch: ## Run tests in watch mode
+	@which reflex > /dev/null || (echo "Installing reflex..." && go install github.com/cespare/reflex@latest)
+	reflex -r '\.go$$' -s -- sh -c 'clear && go test -short ./...'
+
+lint-test: ## Lint test files
+	golangci-lint run --tests ./...
+
+# Generate mocks
+mocks:
+	@echo "Generating mocks..."
+	@go generate ./...
+	@echo "Mocks generated successfully"
+
+# Clean test artifacts
+clean-test:
+	@rm -f coverage.out coverage.html
+	@rm -rf test/tmp
+	@echo "Test artifacts cleaned"
 
 ## bench: Run benchmarks
 bench:

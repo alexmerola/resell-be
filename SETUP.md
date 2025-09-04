@@ -1,3 +1,81 @@
+Test Structure & Organization
+resell-be/
+├── test/
+│   ├── fixtures/                 # Test data files
+│   │   ├── sample_invoice.pdf
+│   │   ├── sample_inventory.xlsx
+│   │   ├── invalid.pdf
+│   │   └── test_data.sql
+│   ├── integration/              # Integration tests
+│   │   ├── inventory_test.go
+│   │   ├── import_test.go
+│   │   ├── export_test.go
+│   │   └── helpers_test.go
+│   ├── e2e/                      # End-to-end tests
+│   │   ├── api_workflow_test.go
+│   │   └── pdf_import_flow_test.go
+│   └── mocks/                    # Generated mocks
+│       ├── mock_repository.go
+│       ├── mock_service.go
+│       └── mock_cache.go
+├── internal/
+│   ├── core/
+│   │   ├── domain/
+│   │   │   └── inventory_test.go
+│   │   └── services/
+│   │       └── inventory_service_test.go
+│   ├── handlers/
+│   │   ├── inventory_handler_test.go
+│   │   ├── export_handler_test.go
+│   │   ├── import_handler_test.go
+│   │   └── dashboard_handler_test.go
+│   ├── adapters/
+│   │   └── db/
+│   │       └── inventory_repository_test.go
+│   └── workers/
+│       ├── pdf_processor_test.go
+│       └── excel_processor_test.go
+└── Makefile                      # Updated with test targets
+Test Dependencies
+Add to go.mod:
+gorequire (
+    github.com/stretchr/testify v1.9.0
+    go.uber.org/mock v0.4.0
+    github.com/ory/dockertest/v3 v3.10.0
+    github.com/DATA-DOG/go-sqlmock v1.5.2
+    github.com/alicebob/miniredis/v2 v2.31.0
+    github.com/jarcoal/httpmock v1.3.1
+)
+Testing Principles
+1. Test Naming Convention
+
+Test functions: Test<FunctionName>_<Scenario>
+Example: TestSaveItem_WithValidData_Success
+
+2. Table-Driven Tests
+
+Use subtests for multiple scenarios
+Clear test case names
+Comprehensive edge case coverage
+
+3. Test Organization
+
+Arrange: Set up test data and dependencies
+Act: Execute the function under test
+Assert: Verify the results
+
+4. Mocking Strategy
+
+Mock external dependencies (DB, Redis, HTTP)
+Use interfaces for dependency injection
+Generate mocks with mockgen
+
+5. Test Coverage Goals
+
+Unit tests: 80%+ coverage
+Integration tests: Critical paths
+E2E tests: Main user workflows
+
 # 🚀 Resell Inventory Management System - Setup Guide
 
 ## Quick Reference Card

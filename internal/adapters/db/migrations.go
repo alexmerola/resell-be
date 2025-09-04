@@ -170,7 +170,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 	// Get new version
 	newVersion, _, err := m.migrate.Version()
 	if err != nil {
-		m.logger.WarnContext(ctx, "failed to get new version", err)
+		m.logger.WarnContext(ctx, "failed to get new version", "err", err)
 	} else {
 		m.logger.InfoContext(ctx, "migrations completed",
 			slog.Uint64("version", uint64(newVersion)))
@@ -202,7 +202,7 @@ func (m *Migrator) Down(ctx context.Context) error {
 
 	newVersion, _, err := m.migrate.Version()
 	if err != nil && err != migrate.ErrNilVersion {
-		m.logger.WarnContext(ctx, "failed to get new version", err)
+		m.logger.WarnContext(ctx, "failed to get new version", "err", err)
 	} else {
 		m.logger.InfoContext(ctx, "migration rolled back",
 			slog.Uint64("from_version", uint64(version)),
@@ -401,7 +401,7 @@ func RunMigrationsWithRetry(ctx context.Context, config *MigrationConfig, logger
 		if err != nil {
 			lastErr = fmt.Errorf("failed to create migrator: %w", err)
 			logger.ErrorContext(ctx, "failed to create migrator",
-				err,
+				"err", err,
 				slog.Int("attempt", i+1))
 			continue
 		}
@@ -416,12 +416,12 @@ func RunMigrationsWithRetry(ctx context.Context, config *MigrationConfig, logger
 		if err != nil {
 			lastErr = err
 			logger.ErrorContext(ctx, "migration failed",
-				err,
+				"err", err,
 				slog.Int("attempt", i+1))
 		}
 		if closeErr != nil {
 			logger.ErrorContext(ctx, "failed to close migrator",
-				closeErr)
+				"closeErr", closeErr)
 		}
 	}
 
