@@ -9,15 +9,22 @@ import (
 )
 
 // InventoryRepository defines the persistence port for inventory.
-// This interface is implemented by the database adapter.
+// This interface is the contract between the service layer and data layer.
+// ALL database operations for inventory go through this interface.
 type InventoryRepository interface {
+	// Basic CRUD operations
 	Save(ctx context.Context, item *domain.InventoryItem) error
 	SaveBatch(ctx context.Context, items []domain.InventoryItem) error
 	Update(ctx context.Context, item *domain.InventoryItem) error
-	FindByID(ctx context.Context, lotID uuid.UUID) (*domain.InventoryItem, error)
-	FindByInvoiceID(ctx context.Context, invoiceID string) ([]domain.InventoryItem, error)
 	Delete(ctx context.Context, lotID uuid.UUID) error
 	SoftDelete(ctx context.Context, lotID uuid.UUID) error
+
+	// Query operations
+	FindByID(ctx context.Context, lotID uuid.UUID) (*domain.InventoryItem, error)
+	FindByInvoiceID(ctx context.Context, invoiceID string) ([]domain.InventoryItem, error)
+	FindAll(ctx context.Context, params ListParams) ([]*domain.InventoryItem, int64, error)
+
+	// Utility operations
 	Count(ctx context.Context) (int64, error)
 	Exists(ctx context.Context, lotID uuid.UUID) (bool, error)
 }

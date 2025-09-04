@@ -10,13 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ammerola/resell-be/internal/handlers/middleware"
+	"github.com/ammerola/resell-be/internal/pkg/logger"
 	"github.com/ammerola/resell-be/test/helpers"
 )
 
 func TestRequestID(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request ID is in context
-		requestID := r.Context().Value("request_id")
+		requestID := r.Context().Value(logger.ContextKeyRequestID)
 		assert.NotNil(t, requestID)
 		assert.NotEmpty(t, requestID.(string))
 
@@ -67,17 +68,17 @@ func TestRequestID(t *testing.T) {
 }
 
 func TestLogger(t *testing.T) {
-	logger := helpers.TestLogger()
+	log := logger.SetupLogger("debug", "text")
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("test response"))
 	})
 
-	wrapped := middleware.Logger(logger)(handler)
+	wrapped := middleware.Logger(log)(handler)
 
 	req := httptest.NewRequest("GET", "/test", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "request_id", "test-123"))
+	req = req.WithContext(context.WithValue(req.Context(), logger.ContextKeyRequestID, "test-123"))
 	w := httptest.NewRecorder()
 
 	wrapped.ServeHTTP(w, req)
@@ -88,7 +89,7 @@ func TestLogger(t *testing.T) {
 }
 
 func TestRecovery(t *testing.T) {
-	logger := helpers.TestLogger()
+	log := helpers.TestLogger()
 
 	tests := []struct {
 		name           string
@@ -117,10 +118,10 @@ func TestRecovery(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wrapped := middleware.Recovery(logger)(tt.handler)
+			wrapped := middleware.Recovery(log)(tt.handler)
 
 			req := httptest.NewRequest("GET", "/test", nil)
-			req = req.WithContext(context.WithValue(req.Context(), "request_id", "test-123"))
+			req = req.WithContext(context.WithValue(req.Context(), logger.ContextKeyRequestID, "test-123"))
 			w := httptest.NewRecorder()
 
 			wrapped.ServeHTTP(w, req)

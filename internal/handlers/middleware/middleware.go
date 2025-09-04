@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ammerola/resell-be/internal/pkg/logger"
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 )
@@ -28,7 +29,7 @@ func RequestID(next http.Handler) http.Handler {
 		}
 
 		// Add to context
-		ctx := context.WithValue(r.Context(), "request_id", requestID)
+		ctx := context.WithValue(r.Context(), logger.ContextKeyRequestID, requestID)
 
 		// Add to response header
 		w.Header().Set("X-Request-ID", requestID)
@@ -38,66 +39,153 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// Logger middleware logs HTTP requests
-func Logger(logger *slog.Logger) func(http.Handler) http.Handler {
+func Logger(l *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			// Get request ID from context
-			requestID, _ := r.Context().Value("request_id").(string)
+			// Generate or extract request ID
+			requestID := r.Header.Get("X-Request-ID")
+			if requestID == "" {
+				requestID = uuid.New().String()
+			}
 
-			// Wrap response writer to capture status
+			// Generate trace ID for distributed tracing
+			traceID := r.Header.Get("X-Trace-ID")
+			if traceID == "" {
+				traceID = uuid.New().String()
+			}
+
+			// Extract client IP
+			clientIP := getClientIP(r)
+
+			// Enrich context with logging fields
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, logger.ContextKeyRequestID, requestID)
+			ctx = context.WithValue(ctx, logger.ContextKeyTraceID, traceID)
+			ctx = context.WithValue(ctx, logger.ContextKeyClientIP, clientIP)
+			ctx = context.WithValue(ctx, logger.ContextKeyUserAgent, r.UserAgent())
+			ctx = context.WithValue(ctx, logger.ContextKeyMethod, r.Method)
+			ctx = context.WithValue(ctx, logger.ContextKeyPath, r.URL.Path)
+
+			// Extract user ID from auth header or session (if available)
+			if userID := extractUserID(r); userID != "" {
+				ctx = context.WithValue(ctx, logger.ContextKeyUserID, userID)
+			}
+
+			// Wrap response writer to capture status and size
 			wrapped := &responseWriter{
 				ResponseWriter: w,
 				statusCode:     http.StatusOK,
 			}
 
+			// Set request ID in response header
+			w.Header().Set("X-Request-ID", requestID)
+			w.Header().Set("X-Trace-ID", traceID)
+
+			// Create logger with context
+			contextLogger := l.WithContext(ctx)
+
 			// Log request start
-			logger.InfoContext(r.Context(), "request started",
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.String("remote_addr", r.RemoteAddr),
-				slog.String("request_id", requestID),
-				slog.String("user_agent", r.UserAgent()),
+			contextLogger.Log(ctx, slog.LevelInfo, "request_started",
+				slog.Group("request",
+					slog.String("method", r.Method),
+					slog.String("path", r.URL.Path),
+					slog.String("query", r.URL.RawQuery),
+					slog.String("remote_addr", r.RemoteAddr),
+					slog.String("client_ip", clientIP),
+					slog.String("user_agent", r.UserAgent()),
+					slog.String("referer", r.Referer()),
+					slog.Int64("content_length", r.ContentLength),
+				),
+				slog.Group("ids",
+					slog.String("request_id", requestID),
+					slog.String("trace_id", traceID),
+				),
 			)
 
 			// Process request
-			next.ServeHTTP(wrapped, r)
+			next.ServeHTTP(wrapped, r.WithContext(ctx))
+
+			// Calculate duration
+			duration := time.Since(start)
+
+			// Add response context
+			ctx = context.WithValue(ctx, logger.ContextKeyStatusCode, wrapped.statusCode)
+			ctx = context.WithValue(ctx, logger.ContextKeyDuration, duration)
+
+			// Determine log level based on status code
+			logLevel := slog.LevelInfo
+			if wrapped.statusCode >= 500 {
+				logLevel = slog.LevelError
+			} else if wrapped.statusCode >= 400 {
+				logLevel = slog.LevelWarn
+			} else if duration > 5*time.Second {
+				logLevel = slog.LevelWarn
+			}
 
 			// Log request completion
-			duration := time.Since(start)
-			logger.InfoContext(r.Context(), "request completed",
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.Int("status", wrapped.statusCode),
-				slog.Int("bytes", wrapped.bytesWritten),
-				slog.Duration("duration", duration),
-				slog.String("request_id", requestID),
+			contextLogger.Log(ctx, logLevel, "request_completed",
+				slog.Group("request",
+					slog.String("method", r.Method),
+					slog.String("path", r.URL.Path),
+					slog.String("query", r.URL.RawQuery),
+				),
+				slog.Group("response",
+					slog.Int("status", wrapped.statusCode),
+					slog.String("status_text", http.StatusText(wrapped.statusCode)),
+					slog.Int("bytes", wrapped.bytesWritten),
+					slog.Duration("duration", duration),
+					slog.Float64("duration_ms", float64(duration.Milliseconds())),
+				),
+				slog.Group("performance",
+					slog.Bool("slow_request", duration > 5*time.Second),
+					slog.String("latency_human", duration.String()),
+				),
 			)
 
-			// Warn on slow requests
+			// Log slow queries separately for monitoring
 			if duration > 5*time.Second {
-				logger.WarnContext(r.Context(), "slow request detected",
+				l.WarnContext(ctx, "slow_request_detected",
 					slog.String("path", r.URL.Path),
 					slog.Duration("duration", duration),
-					slog.String("request_id", requestID),
+					slog.String("threshold", "5s"),
 				)
 			}
 		})
 	}
 }
 
+// Helper function to extract user ID from request
+func extractUserID(r *http.Request) string {
+	// Try JWT token first
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if strings.HasPrefix(auth, "Bearer ") {
+			// Parse JWT and extract user ID
+			// This is simplified - you'd actually validate and parse the JWT
+			return "" // Would return actual user ID
+		}
+	}
+
+	// Try session cookie
+	if _, err := r.Cookie("session_id"); err == nil {
+		// Look up session and get user ID
+		return "" // Would return actual user ID from session
+	}
+
+	return ""
+}
+
 // Recovery middleware recovers from panics
-func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
+func Recovery(slogger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if err := recover(); err != nil {
-					requestID, _ := r.Context().Value("request_id").(string)
+					requestID, _ := r.Context().Value(logger.ContextKeyRequestID).(string)
 
 					// Log the panic
-					logger.ErrorContext(r.Context(), "panic recovered",
+					slogger.ErrorContext(r.Context(), "panic recovered",
 						slog.Any("error", err),
 						slog.String("request_id", requestID),
 						slog.String("stack", string(debug.Stack())),
@@ -303,10 +391,11 @@ func getClientIP(r *http.Request) string {
 	}
 
 	// Fall back to RemoteAddr
-	parts := strings.Split(r.RemoteAddr, ":")
-	if len(parts) > 0 {
-		return parts[0]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
 	}
+
 	return r.RemoteAddr
 }
 

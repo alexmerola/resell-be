@@ -19,25 +19,25 @@ import (
 )
 
 func main() {
-	// Setup logger
-	slogger := logger.SetupLogger("info", "json")
+	// Setup temporary logger for config loading
+	tempLogger := logger.SetupLogger("info", "json")
 
 	// Load configuration
-	cfg, err := config.Load(slogger)
+	cfg, err := config.Load(tempLogger.Logger)
 	if err != nil {
-		slogger.Error("failed to load configuration", slog.String("error", err.Error()))
+		tempLogger.Error("failed to load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	// Reconfigure logger with loaded settings
-	slogger = logger.SetupLogger(cfg.App.LogLevel, cfg.App.LogFormat)
+	slogger := logger.SetupLogger(cfg.App.LogLevel, cfg.App.LogFormat)
 	slogger.Info("starting worker",
 		slog.String("environment", cfg.App.Environment),
 		slog.String("redis_addr", cfg.Asynq.RedisAddr))
 
 	// Initialize database
 	ctx := context.Background()
-	database, err := initDatabase(ctx, cfg, slogger)
+	database, err := initDatabase(ctx, cfg, slogger.Logger)
 	if err != nil {
 		slogger.Error("failed to initialize database", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -45,8 +45,8 @@ func main() {
 	defer database.Close()
 
 	// Initialize repositories and services
-	inventoryRepo := db.NewInventoryRepository(database, slogger)
-	inventoryService := services.NewInventoryService(inventoryRepo, database.Pool(), slogger)
+	inventoryRepo := db.NewInventoryRepository(database, slogger.Logger)
+	inventoryService := services.NewInventoryService(inventoryRepo, database.Pool(), slogger.Logger)
 
 	// Create Asynq server
 	srv := asynq.NewServer(
@@ -63,7 +63,7 @@ func main() {
 			RetryDelayFunc:  exponentialBackoff,
 			ShutdownTimeout: cfg.Asynq.ShutdownTimeout,
 			HealthCheckFunc: healthCheck,
-			Logger:          newAsynqLogger(slogger),
+			Logger:          newAsynqLogger(slogger.Logger),
 		},
 	)
 
@@ -71,24 +71,24 @@ func main() {
 	mux := asynq.NewServeMux()
 
 	// Register PDF processing handler
-	pdfProcessor := workers.NewPDFProcessor(inventoryService, database, slogger)
+	pdfProcessor := workers.NewPDFProcessor(inventoryService, database, slogger.Logger)
 	mux.HandleFunc(workers.TypePDFProcess, pdfProcessor.ProcessPDF)
 
 	// Register Excel processing handler
-	excelProcessor := workers.NewExcelProcessor(inventoryService, database, slogger)
+	excelProcessor := workers.NewExcelProcessor(inventoryService, database, slogger.Logger)
 	mux.HandleFunc(workers.TypeExcelImport, excelProcessor.ProcessExcel)
 
 	// Register analytics handler
-	analyticsProcessor := workers.NewAnalyticsProcessor(database, slogger)
+	analyticsProcessor := workers.NewAnalyticsProcessor(database, slogger.Logger)
 	mux.HandleFunc(workers.TypeRefreshAnalytics, analyticsProcessor.RefreshAnalytics)
 	mux.HandleFunc(workers.TypeGenerateReport, analyticsProcessor.GenerateReport)
 
 	// Register email notification handler
-	notificationProcessor := workers.NewNotificationProcessor(cfg, slogger)
+	notificationProcessor := workers.NewNotificationProcessor(cfg, slogger.Logger)
 	mux.HandleFunc(workers.TypeSendEmail, notificationProcessor.SendEmail)
 
 	// Register cleanup handler
-	cleanupProcessor := workers.NewCleanupProcessor(database, cfg, slogger)
+	cleanupProcessor := workers.NewCleanupProcessor(database, cfg, slogger.Logger)
 	mux.HandleFunc(workers.TypeCleanupOldData, cleanupProcessor.CleanupOldData)
 	mux.HandleFunc(workers.TypeCleanupTempFiles, cleanupProcessor.CleanupTempFiles)
 
@@ -116,7 +116,7 @@ func main() {
 	slogger.Info("worker shutdown complete")
 }
 
-func initDatabase(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*db.Database, error) {
+func initDatabase(ctx context.Context, cfg *config.Config, slogger *slog.Logger) (*db.Database, error) {
 	dbConfig := &db.Config{
 		Host:               cfg.Database.Host,
 		Port:               cfg.Database.Port,
@@ -134,7 +134,7 @@ func initDatabase(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		EnableQueryLogging: cfg.Database.EnableQueryLogging,
 	}
 
-	return db.NewDatabase(ctx, dbConfig, logger)
+	return db.NewDatabase(ctx, dbConfig, slogger)
 }
 
 func handleError(ctx context.Context, task *asynq.Task, err error) {
@@ -165,9 +165,9 @@ type asynqLogger struct {
 	logger *slog.Logger
 }
 
-func newAsynqLogger(logger *slog.Logger) *asynqLogger {
+func newAsynqLogger(slogger *slog.Logger) *asynqLogger {
 	return &asynqLogger{
-		logger: logger.With(slog.String("component", "asynq")),
+		logger: slogger.With(slog.String("component", "asynq")),
 	}
 }
 

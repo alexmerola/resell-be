@@ -13,6 +13,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/ammerola/resell-be/internal/core/domain"
+	"github.com/ammerola/resell-be/internal/core/ports"
 	"github.com/ammerola/resell-be/internal/core/services"
 	"github.com/ammerola/resell-be/test/helpers"
 	"github.com/ammerola/resell-be/test/mocks"
@@ -502,6 +503,127 @@ func TestInventoryService_DeleteItem(t *testing.T) {
 				}
 			} else {
 				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestInventoryService_List validates the refactored List method which delegates querying to the repository.
+func TestInventoryService_List(t *testing.T) {
+	ctx := context.Background()
+	testItems := []*domain.InventoryItem{helpers.CreateTestInventoryItem()}
+
+	tests := []struct {
+		name               string
+		inputParams        ports.ListParams
+		mockRepoResponse   []*domain.InventoryItem
+		mockRepoTotal      int64
+		mockRepoErr        error
+		expectedResult     *ports.ListResult
+		expectedError      bool
+		expectedErrorMsg   string
+		expectedRepoParams ports.ListParams
+	}{
+		{
+			name:             "successfully_lists_items_on_first_page",
+			inputParams:      ports.ListParams{Page: 1, PageSize: 10, Category: "antiques"},
+			mockRepoResponse: testItems,
+			mockRepoTotal:    1,
+			mockRepoErr:      nil,
+			expectedResult: &ports.ListResult{
+				Items:      testItems,
+				Page:       1,
+				PageSize:   10,
+				TotalCount: 1,
+				TotalPages: 1,
+			},
+			expectedError:      false,
+			expectedRepoParams: ports.ListParams{Page: 1, PageSize: 10, Category: "antiques"},
+		},
+		{
+			name:             "successfully_lists_items_with_multiple_pages",
+			inputParams:      ports.ListParams{Page: 2, PageSize: 50},
+			mockRepoResponse: testItems,
+			mockRepoTotal:    101, // 3 pages total
+			mockRepoErr:      nil,
+			expectedResult: &ports.ListResult{
+				Items:      testItems,
+				Page:       2,
+				PageSize:   50,
+				TotalCount: 101,
+				TotalPages: 3,
+			},
+			expectedError:      false,
+			expectedRepoParams: ports.ListParams{Page: 2, PageSize: 50},
+		},
+		{
+			name:             "normalizes_invalid_page_and_pageSize",
+			inputParams:      ports.ListParams{Page: 0, PageSize: 2000}, // Page < 1, PageSize > max
+			mockRepoResponse: testItems,
+			mockRepoTotal:    1,
+			mockRepoErr:      nil,
+			expectedResult: &ports.ListResult{
+				Items:      testItems,
+				Page:       1,
+				PageSize:   1000,
+				TotalCount: 1,
+				TotalPages: 1,
+			},
+			expectedError:      false,
+			expectedRepoParams: ports.ListParams{Page: 1, PageSize: 1000},
+		},
+		{
+			name:               "handles_repository_error",
+			inputParams:        ports.ListParams{Page: 1, PageSize: 10},
+			mockRepoErr:        errors.New("database connection failed"),
+			expectedError:      true,
+			expectedErrorMsg:   "failed to list inventory items",
+			expectedRepoParams: ports.ListParams{Page: 1, PageSize: 10},
+		},
+		{
+			name:             "handles_zero_results",
+			inputParams:      ports.ListParams{Page: 1, PageSize: 10},
+			mockRepoResponse: []*domain.InventoryItem{},
+			mockRepoTotal:    0,
+			mockRepoErr:      nil,
+			expectedResult: &ports.ListResult{
+				Items:      []*domain.InventoryItem{},
+				Page:       1,
+				PageSize:   10,
+				TotalCount: 0,
+				TotalPages: 0,
+			},
+			expectedError:      false,
+			expectedRepoParams: ports.ListParams{Page: 1, PageSize: 10},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockRepo := mocks.NewMockInventoryRepository(ctrl)
+			mockDB := mocks.NewMockPgxPool(ctrl)
+			logger := helpers.TestLogger()
+
+			service := services.NewInventoryService(mockRepo, mockDB, logger)
+
+			// Setup mock to expect the normalized parameters
+			mockRepo.EXPECT().
+				FindAll(ctx, tt.expectedRepoParams).
+				Return(tt.mockRepoResponse, tt.mockRepoTotal, tt.mockRepoErr)
+
+			// Execute
+			result, err := service.List(ctx, tt.inputParams)
+
+			// Assert
+			if tt.expectedError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedErrorMsg)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedResult, result)
 			}
 		})
 	}

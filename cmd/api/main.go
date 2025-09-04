@@ -33,7 +33,6 @@ var (
 
 func main() {
 	// Initialize structured logger
-	cfg := &config.Config{} // Temporary for initial logging
 	slogger := logger.SetupLogger("debug", "json")
 
 	slogger.Info("starting resell inventory management system",
@@ -44,7 +43,7 @@ func main() {
 
 	// Load configuration
 	slogger.Info("loading configuration")
-	cfg, err := config.Load(slogger)
+	cfg, err := config.Load(slogger.Logger)
 	if err != nil {
 		slogger.Error("failed to load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -52,6 +51,13 @@ func main() {
 
 	// Reconfigure logger with loaded settings
 	slogger = logger.SetupLogger(cfg.App.LogLevel, cfg.App.LogFormat)
+
+	// Setup ELK logging if enabled
+	if cfg.Logging.EnableELK {
+		slogger = logger.SetupELKLogging(cfg.Logging.ELKConfig)
+		slog.SetDefault(slogger.Logger)
+	}
+
 	slogger.Info("configuration loaded",
 		slog.String("environment", cfg.App.Environment),
 		slog.String("log_level", cfg.App.LogLevel),
@@ -61,7 +67,7 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize dependencies
-	deps, err := initializeDependencies(ctx, cfg, slogger)
+	deps, err := initializeDependencies(ctx, cfg, slogger.Logger)
 	if err != nil {
 		slogger.Error("failed to initialize dependencies", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -70,7 +76,7 @@ func main() {
 
 	// Run database migrations if enabled
 	if cfg.App.Environment != "production" {
-		if err := runMigrations(ctx, cfg, slogger); err != nil {
+		if err := runMigrations(ctx, cfg, slogger.Logger); err != nil {
 			slogger.Error("failed to run migrations", slog.String("error", err.Error()))
 			// Don't exit in development, just warn
 		}
@@ -157,11 +163,11 @@ func (d *dependencies) cleanup() {
 	}
 }
 
-func initializeDependencies(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*dependencies, error) {
+func initializeDependencies(ctx context.Context, cfg *config.Config, slogger *slog.Logger) (*dependencies, error) {
 	deps := &dependencies{}
 
 	// Initialize database connection
-	logger.Info("connecting to database",
+	slogger.Info("connecting to database",
 		slog.String("host", cfg.Database.Host),
 		slog.String("database", cfg.Database.Name),
 	)
@@ -181,14 +187,14 @@ func initializeDependencies(ctx context.Context, cfg *config.Config, logger *slo
 		ConnectTimeout:     cfg.Database.ConnectTimeout,
 		StatementCacheMode: cfg.Database.StatementCacheMode,
 		EnableQueryLogging: cfg.Database.EnableQueryLogging,
-	}, logger)
+	}, slogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 	deps.database = database
 
 	// Initialize Redis client
-	logger.Info("connecting to Redis",
+	slogger.Info("connecting to Redis",
 		slog.String("host", cfg.Redis.Host),
 		slog.String("port", cfg.Redis.Port),
 	)
@@ -219,10 +225,10 @@ func initializeDependencies(ctx context.Context, cfg *config.Config, logger *slo
 	deps.redisClient = redisClient
 
 	// Create Redis cache wrapper
-	deps.redisCache = redis_a.NewCache(redisClient, cfg.Redis.TTL, logger)
+	deps.redisCache = redis_a.NewCache(redisClient, cfg.Redis.TTL, slogger)
 
 	// Initialize Asynq client
-	logger.Info("initializing Asynq client")
+	slogger.Info("initializing Asynq client")
 
 	asynqRedisOpt := asynq.RedisClientOpt{
 		Addr:     cfg.Asynq.RedisAddr,
@@ -237,32 +243,32 @@ func initializeDependencies(ctx context.Context, cfg *config.Config, logger *slo
 	deps.asynqInspector = asynqInspector
 
 	// Initialize repositories
-	inventoryRepo := db.NewInventoryRepository(database, logger)
+	inventoryRepo := db.NewInventoryRepository(database, slogger)
 
 	// Initialize services
-	deps.inventoryService = services.NewInventoryService(inventoryRepo, database.Pool(), logger)
+	deps.inventoryService = services.NewInventoryService(inventoryRepo, database.Pool(), slogger)
 
 	// Initialize handlers
-	deps.inventoryHandler = handlers.NewInventoryHandler(deps.inventoryService, logger)
+	deps.inventoryHandler = handlers.NewInventoryHandler(deps.inventoryService, slogger)
 	deps.healthHandler = handlers.NewHealthHandler(
 		database,
 		redisClient,
 		asynqInspector,
 		cfg,
-		logger,
+		slogger,
 	)
-	deps.dashboardHandler = handlers.NewDashboardHandler(database, deps.redisCache, logger)
-	deps.exportHandler = handlers.NewExportHandler(deps.inventoryService, database, deps.redisCache, logger)
+	deps.dashboardHandler = handlers.NewDashboardHandler(database, deps.redisCache, slogger)
+	deps.exportHandler = handlers.NewExportHandler(deps.inventoryService, database, deps.redisCache, slogger)
 
 	// Calculate max file size in bytes
 	maxFileSize := int64(cfg.FileProcessing.PDFMaxSizeMB * 1024 * 1024)
-	deps.importHandler = handlers.NewImportHandler(asynqClient, logger, maxFileSize, cfg.FileProcessing.TempDir)
+	deps.importHandler = handlers.NewImportHandler(asynqClient, slogger, maxFileSize, cfg.FileProcessing.TempDir)
 
-	logger.Info("all dependencies initialized successfully")
+	slogger.Info("all dependencies initialized successfully")
 	return deps, nil
 }
 
-func setupHTTPServer(cfg *config.Config, deps *dependencies, logger *slog.Logger) *http.Server {
+func setupHTTPServer(cfg *config.Config, deps *dependencies, l *logger.Logger) *http.Server {
 	// Create new ServeMux using Go 1.22+ features
 	mux := http.NewServeMux()
 
@@ -272,8 +278,8 @@ func setupHTTPServer(cfg *config.Config, deps *dependencies, logger *slog.Logger
 	// Apply middleware in reverse order (innermost first)
 	if cfg.App.Environment != "test" {
 		handler = middleware.RequestID(handler)
-		handler = middleware.Logger(logger)(handler)
-		handler = middleware.Recovery(logger)(handler)
+		handler = middleware.Logger(l)(handler)
+		handler = middleware.Recovery(l.Logger)(handler)
 	}
 
 	if cfg.Security.RateLimitRequests > 0 {
@@ -289,7 +295,7 @@ func setupHTTPServer(cfg *config.Config, deps *dependencies, logger *slog.Logger
 	}
 
 	// Register routes using Go 1.22 method-specific routing
-	registerRoutes(mux, deps, logger, cfg)
+	registerRoutes(mux, deps, l.Logger, cfg)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -299,13 +305,13 @@ func setupHTTPServer(cfg *config.Config, deps *dependencies, logger *slog.Logger
 		WriteTimeout:   cfg.Server.WriteTimeout,
 		IdleTimeout:    cfg.Server.IdleTimeout,
 		MaxHeaderBytes: cfg.Server.MaxHeaderBytes,
-		ErrorLog:       slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		ErrorLog:       slog.NewLogLogger(l.Handler(), slog.LevelError),
 	}
 
 	return server
 }
 
-func registerRoutes(mux *http.ServeMux, deps *dependencies, logger *slog.Logger, cfg *config.Config) {
+func registerRoutes(mux *http.ServeMux, deps *dependencies, slogger *slog.Logger, cfg *config.Config) {
 	apiV1 := "/api/v1"
 
 	// Health and readiness endpoints
@@ -391,8 +397,8 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"message": "Serving file: %s"}`, path)
 }
 
-func runMigrations(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
-	logger.Info("running database migrations")
+func runMigrations(ctx context.Context, cfg *config.Config, slogger *slog.Logger) error {
+	slogger.Info("running database migrations")
 
 	migrationConfig := &db.MigrationConfig{
 		DatabaseURL: cfg.GetDatabaseURL(),
@@ -401,5 +407,5 @@ func runMigrations(ctx context.Context, cfg *config.Config, logger *slog.Logger)
 		SchemaName:  "public",
 	}
 
-	return db.RunMigrationsWithRetry(ctx, migrationConfig, logger, 3)
+	return db.RunMigrationsWithRetry(ctx, migrationConfig, slogger, 3)
 }

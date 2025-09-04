@@ -6,9 +6,6 @@ run:
   # Timeout for analysis
   timeout: 5m
   
-  # Exit code when at least one issue was found
-  issues-exit-code: 1
-  
   # Include test files
   tests: true
   
@@ -16,24 +13,6 @@ run:
   build-tags:
     - integration
     - e2e
-  
-  # Which dirs to skip
-  skip-dirs:
-    - vendor
-    - third_party
-    - testdata
-    - examples
-    - bin
-    - tmp
-    - build
-    - dist
-    - docs
-  
-  # Which files to skip
-  skip-files:
-    - ".*\\.pb\\.go$"
-    - ".*\\.gen\\.go$"
-    - "mock_.*\\.go$"
   
   # By default isn't set. If set we pass it to "go list -mod={option}".
   modules-download-mode: readonly
@@ -43,16 +22,14 @@ run:
 
 output:
   # Format: colored-line-number|line-number|json|tab|checkstyle|code-climate
-  format: colored-line-number
+  formats:
+    - format: colored-line-number
   
   # Print lines of code with issue
   print-issued-lines: true
   
   # Print linter name in the end of issue text
   print-linter-name: true
-  
-  # Make issues output unique by line
-  uniq-by-line: true
   
   # Sort results by: filepath, line and column
   sort-results: true
@@ -75,7 +52,7 @@ linters:
     - bodyclose     # Checks whether HTTP response body is closed
     - dogsled       # Checks assignments with too many blank identifiers
     - dupl          # Tool for code clone detection
-    - exportloopref # Checks for pointers to enclosing loop variables
+    - copyloopvar   # Checks for pointers to enclosing loop variables (replaces exportloopref)
     - gci           # Controls Go package import order
     - gocognit      # Computes cognitive complexity of functions
     - goconst       # Finds repeated strings that could be constants
@@ -84,7 +61,7 @@ linters:
     - godot         # Check if comments end in a period
     - gofmt         # Checks whether code was gofmt-ed
     - goimports     # Check import statements are formatted
-    - gomnd         # Detects magic numbers
+    - mnd           # Detects magic numbers (replaces gomnd)
     - goprintffuncname # Checks that printf-like functions are named with f at the end
     - gosec         # Security problems
     - lll           # Reports long lines
@@ -104,18 +81,6 @@ linters:
     - unconvert     # Remove unnecessary type conversions
     - unparam       # Reports unused function parameters
     - whitespace    # Detection of leading and trailing whitespace
-    
-    # Optional (more strict)
-    # - cyclop        # Checks function and package cyclomatic complexity
-    # - errorlint     # Find code that will cause problems with error wrapping
-    # - exhaustive    # Check exhaustiveness of enum switch statements
-    # - forbidigo     # Forbids identifiers
-    # - funlen        # Tool for detection of long functions
-    # - gochecknoinits # Checks that no init functions are present
-    # - godox         # Tool for detection of FIXME, TODO and other comments
-    # - goerr113      # Check the errors handling expressions
-    # - nestif        # Reports deeply nested if statements
-    # - wsl           # Whitespace Linter
 
 linters-settings:
   errcheck:
@@ -135,9 +100,6 @@ linters-settings:
       - fmt.Println
   
   govet:
-    # Report about shadowed variables
-    check-shadowing: true
-    
     # Settings per analyzer
     settings:
       printf:
@@ -146,9 +108,14 @@ linters-settings:
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
           - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+      shadow:
+        # Report about shadowed variables
+        strict: true
     
-    # Enable all analyzers
-    enable-all: true
+    # Enable specific analyzers
+    enable:
+      - shadow
+    enable-all: false
   
   gofmt:
     # Simplify code
@@ -156,7 +123,7 @@ linters-settings:
   
   goimports:
     # Put imports beginning with prefix after 3rd-party packages
-    local-prefixes: github.com/yourusername/resell-be
+    local-prefixes: github.com/ammerola/resell-be
   
   gocyclo:
     # Minimal code complexity to report
@@ -243,13 +210,56 @@ linters-settings:
     
     # Check that each sentence starts with a capital letter
     capital: true
+  
+  mnd:
+    # Same settings as the old gomnd
+    checks:
+      - argument
+      - case
+      - condition
+      - operation
+      - return
+      - assign
 
 issues:
+  # Maximum issues count per one linter
+  max-issues-per-linter: 0
+  
+  # Maximum count of issues with the same text
+  max-same-issues: 0
+  
+  # Show only new issues
+  new: false
+  
+  # Exit code when at least one issue was found
+  issues-exit-code: 1
+  
+  # Make issues output unique by line
+  uniq-by-line: true
+  
   # List of regexps of issue texts to exclude
   exclude:
     - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*print(ln)?|os\\.(Un)?Setenv). is not checked"
     - "exported (type|method|function) (.+) should have comment or be unexported"
     - "ST1000: at least one file in a package should have a package comment"
+  
+  # Which dirs to exclude
+  exclude-dirs:
+    - vendor
+    - third_party
+    - testdata
+    - examples
+    - bin
+    - tmp
+    - build
+    - dist
+    - docs
+  
+  # Which files to exclude
+  exclude-files:
+    - ".*\\.pb\\.go$"
+    - ".*\\.gen\\.go$"
+    - "mock_.*\\.go$"
   
   # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
@@ -266,7 +276,7 @@ issues:
         - dupl
         - gosec
         - goconst
-        - gomnd
+        - mnd
         - unparam
         - unused
         - lll
@@ -282,7 +292,6 @@ issues:
     # Exclude generated files
     - path: .*\.gen\.go
       linters:
-        - golint
         - stylecheck
         - lll
     
@@ -296,12 +305,3 @@ issues:
       linters:
         - dupl
       text: "duplicate of"
-  
-  # Maximum issues count per one linter
-  max-issues-per-linter: 0
-  
-  # Maximum count of issues with the same text
-  max-same-issues: 0
-  
-  # Show only new issues
-  new: false

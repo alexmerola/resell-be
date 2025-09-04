@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/ammerola/resell-be/internal/core/domain"
 	"github.com/ammerola/resell-be/internal/core/ports"
@@ -14,26 +13,24 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// PgxPool interface defines the contract for database operations
+// PgxPool interface defines the contract for database operations needed by the service
 type PgxPool interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
-	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
-// InventoryService handles inventory business logic
+// InventoryService orchestrates business logic for inventory management
+// It delegates ALL data access operations to the repository
 type InventoryService struct {
 	repo   ports.InventoryRepository
-	db     PgxPool
+	db     PgxPool // Only used for transaction management, not queries
 	logger *slog.Logger
 }
 
-// Statically assert that *InventoryService implements the InventoryService interface.
+// Statically assert that *InventoryService implements the InventoryService interface
 var _ ports.InventoryService = (*InventoryService)(nil)
 
-// NewInventoryService creates a new inventory service
+// NewInventoryService creates a new inventory service instance
 func NewInventoryService(repo ports.InventoryRepository, db PgxPool, logger *slog.Logger) *InventoryService {
 	return &InventoryService{
 		repo:   repo,
@@ -42,40 +39,17 @@ func NewInventoryService(repo ports.InventoryRepository, db PgxPool, logger *slo
 	}
 }
 
-// SaveItems saves multiple inventory items with transaction support
-func (s *InventoryService) SaveItems(ctx context.Context, items []domain.InventoryItem) error {
-	if len(items) == 0 {
-		s.logger.InfoContext(ctx, "no items to save")
-		return nil
-	}
-
-	// Validate all items first
-	for i := range items {
-		if err := items[i].Validate(); err != nil {
-			return fmt.Errorf("validation failed for item %s: %w", items[i].ItemName, err)
-		}
-		items[i].PrepareForStorage()
-	}
-
-	// Use repository's batch save
-	if err := s.repo.SaveBatch(ctx, items); err != nil {
-		return fmt.Errorf("failed to save items batch: %w", err)
-	}
-
-	s.logger.InfoContext(ctx, "saved inventory items",
-		slog.Int("count", len(items)))
-
-	return nil
-}
-
-// SaveItem saves a single inventory item
+// SaveItem validates and saves a single inventory item
 func (s *InventoryService) SaveItem(ctx context.Context, item *domain.InventoryItem) error {
+	// Business validation
 	if err := item.Validate(); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
+	// Prepare item for storage (sets UUID, timestamps, calculates totals)
 	item.PrepareForStorage()
 
+	// Delegate to repository for actual persistence
 	if err := s.repo.Save(ctx, item); err != nil {
 		return fmt.Errorf("failed to save item: %w", err)
 	}
@@ -88,7 +62,33 @@ func (s *InventoryService) SaveItem(ctx context.Context, item *domain.InventoryI
 	return nil
 }
 
-// BulkUpsert performs a bulk upsert operation with optimizations
+// SaveItems saves multiple inventory items in batch
+func (s *InventoryService) SaveItems(ctx context.Context, items []domain.InventoryItem) error {
+	if len(items) == 0 {
+		s.logger.InfoContext(ctx, "no items to save")
+		return nil
+	}
+
+	// Validate and prepare all items
+	for i := range items {
+		if err := items[i].Validate(); err != nil {
+			return fmt.Errorf("validation failed for item %s: %w", items[i].ItemName, err)
+		}
+		items[i].PrepareForStorage()
+	}
+
+	// Delegate to repository for batch save
+	if err := s.repo.SaveBatch(ctx, items); err != nil {
+		return fmt.Errorf("failed to save items batch: %w", err)
+	}
+
+	s.logger.InfoContext(ctx, "saved inventory items",
+		slog.Int("count", len(items)))
+
+	return nil
+}
+
+// BulkUpsert performs a bulk upsert operation in batches for efficiency
 func (s *InventoryService) BulkUpsert(ctx context.Context, items []domain.InventoryItem) error {
 	const batchSize = 100
 
@@ -102,12 +102,16 @@ func (s *InventoryService) BulkUpsert(ctx context.Context, items []domain.Invent
 		if err := s.SaveItems(ctx, batch); err != nil {
 			return fmt.Errorf("failed to save batch %d-%d: %w", i, end, err)
 		}
+
+		s.logger.DebugContext(ctx, "bulk upsert batch completed",
+			slog.Int("batch_start", i),
+			slog.Int("batch_end", end))
 	}
 
 	return nil
 }
 
-// GetByID retrieves an inventory item by ID
+// GetByID retrieves an inventory item by its ID
 func (s *InventoryService) GetByID(ctx context.Context, lotID uuid.UUID) (*domain.InventoryItem, error) {
 	item, err := s.repo.FindByID(ctx, lotID)
 	if err != nil {
@@ -140,9 +144,10 @@ func (s *InventoryService) UpdateItem(ctx context.Context, lotID uuid.UUID, item
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Recalculate costs
+	// Recalculate financial fields
 	item.CalculateTotalCost()
 
+	// Delegate to repository
 	if err := s.repo.Update(ctx, item); err != nil {
 		return fmt.Errorf("failed to update item: %w", err)
 	}
@@ -153,7 +158,7 @@ func (s *InventoryService) UpdateItem(ctx context.Context, lotID uuid.UUID, item
 	return nil
 }
 
-// DeleteItem deletes an inventory item (soft delete by default)
+// DeleteItem deletes an inventory item (soft or permanent)
 func (s *InventoryService) DeleteItem(ctx context.Context, lotID uuid.UUID, permanent bool) error {
 	// Check if item exists
 	exists, err := s.repo.Exists(ctx, lotID)
@@ -165,6 +170,7 @@ func (s *InventoryService) DeleteItem(ctx context.Context, lotID uuid.UUID, perm
 		return fmt.Errorf("inventory item not found: %s", lotID)
 	}
 
+	// Perform deletion
 	if permanent {
 		err = s.repo.Delete(ctx, lotID)
 	} else {
@@ -183,21 +189,35 @@ func (s *InventoryService) DeleteItem(ctx context.Context, lotID uuid.UUID, perm
 }
 
 // List retrieves inventory items with filtering and pagination
+// This method now simply delegates to the repository, which handles ALL query logic
 func (s *InventoryService) List(ctx context.Context, params ports.ListParams) (*ports.ListResult, error) {
-	items, totalCount, err := s.getFilteredItems(ctx, params)
+	// Validate and normalize parameters
+	if params.Page < 1 {
+		params.Page = 1
+	}
+	if params.PageSize < 1 {
+		params.PageSize = 50
+	}
+	if params.PageSize > 1000 {
+		params.PageSize = 1000 // Reasonable max to prevent abuse
+	}
+
+	// Delegate ALL query logic to the repository
+	items, totalCount, err := s.repo.FindAll(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list inventory items: %w", err)
 	}
 
-	// Calculate total pages
-	var totalPages int
-	if params.PageSize > 0 {
+	// Calculate pagination metadata
+	totalPages := 0
+	if params.PageSize > 0 && totalCount > 0 {
 		totalPages = int(totalCount) / params.PageSize
 		if int(totalCount)%params.PageSize > 0 {
 			totalPages++
 		}
 	}
 
+	// Build result
 	result := &ports.ListResult{
 		Items:      items,
 		Page:       params.Page,
@@ -206,142 +226,37 @@ func (s *InventoryService) List(ctx context.Context, params ports.ListParams) (*
 		TotalPages: totalPages,
 	}
 
+	s.logger.DebugContext(ctx, "listed inventory items",
+		slog.Int("count", len(items)),
+		slog.Int64("total", totalCount),
+		slog.Int("page", params.Page))
+
 	return result, nil
 }
 
-// getFilteredItems is a helper method that queries the database directly
-func (s *InventoryService) getFilteredItems(ctx context.Context, params ports.ListParams) ([]*domain.InventoryItem, int64, error) {
-	// Build query with filters
-	baseQuery := `
-		SELECT 
-			lot_id, invoice_id, auction_id, item_name, description,
-			category, subcategory, condition, quantity,
-			bid_amount, buyers_premium, sales_tax, shipping_cost,
-			total_cost, cost_per_item, acquisition_date,
-			storage_location, storage_bin, qr_code,
-			estimated_value, market_demand, seasonality_notes,
-			needs_repair, is_consignment, is_returned,
-			keywords, notes, created_at, updated_at
-		FROM inventory
-		WHERE deleted_at IS NULL
-	`
-
-	// Add filters dynamically
-	var conditions []string
-	var args []interface{}
-	argCount := 1
-
-	if params.Search != "" {
-		conditions = append(conditions, fmt.Sprintf("search_vector @@ plainto_tsquery('english', $%d)", argCount))
-		args = append(args, params.Search)
-		argCount++
-	}
-
-	if params.Category != "" {
-		conditions = append(conditions, fmt.Sprintf("category = $%d", argCount))
-		args = append(args, params.Category)
-		argCount++
-	}
-
-	if params.Condition != "" {
-		conditions = append(conditions, fmt.Sprintf("condition = $%d", argCount))
-		args = append(args, params.Condition)
-		argCount++
-	}
-
-	if params.InvoiceID != "" {
-		conditions = append(conditions, fmt.Sprintf("invoice_id = $%d", argCount))
-		args = append(args, params.InvoiceID)
-		argCount++
-	}
-
-	if params.NeedsRepair != nil {
-		conditions = append(conditions, fmt.Sprintf("needs_repair = $%d", argCount))
-		args = append(args, *params.NeedsRepair)
-		argCount++
-	}
-
-	// Build final query
-	if len(conditions) > 0 {
-		baseQuery += " AND " + strings.Join(conditions, " AND ")
-	}
-
-	// Get count
-	countQuery := "SELECT COUNT(*) FROM (" + baseQuery + ") as t"
-	var totalCount int64
-	err := s.db.QueryRow(ctx, countQuery, args...).Scan(&totalCount)
+// GetStatistics returns aggregate statistics about the inventory
+// This is a business logic method that could use specialized repository methods
+func (s *InventoryService) GetStatistics(ctx context.Context) (*InventoryStatistics, error) {
+	totalCount, err := s.repo.Count(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, fmt.Errorf("failed to get inventory count: %w", err)
 	}
 
-	// Add ordering and pagination
-	orderBy := "created_at DESC"
-	if params.SortBy != "" {
-		direction := "ASC"
-		if params.SortOrder == "desc" {
-			direction = "DESC"
-		}
-		orderBy = fmt.Sprintf("%s %s", params.SortBy, direction)
+	// In a full implementation, you might have specialized repository methods
+	// for getting category counts, total value, etc.
+	stats := &InventoryStatistics{
+		TotalItems: totalCount,
+		// Additional statistics would be populated here
 	}
 
-	baseQuery += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", orderBy, argCount, argCount+1)
-	args = append(args, params.PageSize, (params.Page-1)*params.PageSize)
+	return stats, nil
+}
 
-	// Execute query
-	rows, err := s.db.Query(ctx, baseQuery, args...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	var items []*domain.InventoryItem
-	for rows.Next() {
-		item := &domain.InventoryItem{}
-		var keywordsStr, subcategory, storageLocation, storageBin, qrCode, seasonalityNotes, notes *string
-
-		err := rows.Scan(
-			&item.LotID, &item.InvoiceID, &item.AuctionID, &item.ItemName, &item.Description,
-			&item.Category, &subcategory, &item.Condition, &item.Quantity,
-			&item.BidAmount, &item.BuyersPremium, &item.SalesTax, &item.ShippingCost,
-			&item.TotalCost, &item.CostPerItem, &item.AcquisitionDate,
-			&storageLocation, &storageBin, &qrCode,
-			&item.EstimatedValue, &item.MarketDemand, &seasonalityNotes,
-			&item.NeedsRepair, &item.IsConsignment, &item.IsReturned,
-			&keywordsStr, &notes, &item.CreatedAt, &item.UpdatedAt,
-		)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		// Handle nullable fields
-		if subcategory != nil {
-			item.Subcategory = *subcategory
-		}
-		if storageLocation != nil {
-			item.StorageLocation = *storageLocation
-		}
-		if storageBin != nil {
-			item.StorageBin = *storageBin
-		}
-		if qrCode != nil {
-			item.QRCode = *qrCode
-		}
-		if seasonalityNotes != nil {
-			item.SeasonalityNotes = *seasonalityNotes
-		}
-		if notes != nil {
-			item.Notes = *notes
-		}
-		if keywordsStr != nil && *keywordsStr != "" {
-			item.Keywords = strings.Split(*keywordsStr, ",")
-		}
-
-		items = append(items, item)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-
-	return items, totalCount, nil
+// InventoryStatistics holds aggregate statistics about the inventory
+type InventoryStatistics struct {
+	TotalItems       int64          `json:"total_items"`
+	TotalValue       string         `json:"total_value"`
+	CategoryCounts   map[string]int `json:"category_counts,omitempty"`
+	ConditionCounts  map[string]int `json:"condition_counts,omitempty"`
+	AverageItemValue string         `json:"average_item_value,omitempty"`
 }

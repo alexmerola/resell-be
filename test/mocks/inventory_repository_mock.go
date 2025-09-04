@@ -14,6 +14,7 @@ import (
 	reflect "reflect"
 
 	domain "github.com/ammerola/resell-be/internal/core/domain"
+	ports "github.com/ammerola/resell-be/internal/core/ports"
 	uuid "github.com/google/uuid"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -84,6 +85,22 @@ func (m *MockInventoryRepository) Exists(ctx context.Context, lotID uuid.UUID) (
 func (mr *MockInventoryRepositoryMockRecorder) Exists(ctx, lotID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exists", reflect.TypeOf((*MockInventoryRepository)(nil).Exists), ctx, lotID)
+}
+
+// FindAll mocks base method.
+func (m *MockInventoryRepository) FindAll(ctx context.Context, params ports.ListParams) ([]*domain.InventoryItem, int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindAll", ctx, params)
+	ret0, _ := ret[0].([]*domain.InventoryItem)
+	ret1, _ := ret[1].(int64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// FindAll indicates an expected call of FindAll.
+func (mr *MockInventoryRepositoryMockRecorder) FindAll(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAll", reflect.TypeOf((*MockInventoryRepository)(nil).FindAll), ctx, params)
 }
 
 // FindByID mocks base method.
